@@ -1,10 +1,14 @@
 import json
 import asyncio
 import uuid
+import logging
 import redis.asyncio as redis
 from fastapi import WebSocket
 from typing import List, Dict
 from app.core.config import settings
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 INSTANCE_ID = uuid.uuid4().hex
 
@@ -20,20 +24,33 @@ class ConnectionManager:
         if user_id not in self.active_connections:
             self.active_connections[user_id] = []
         self.active_connections[user_id].append(websocket)
-        # Global online presence
-        await self.redis.sadd("online_users", user_id)
+        # Global online presence via connection counting
+        await self.redis.incr(f"user_connections:{user_id}")
+        await self.refresh_user_presence(user_id)
+
+    async def refresh_user_presence(self, user_id: int):
+        """Refreshes the TTL of the user connection key to prevent leaks"""
+        await self.redis.expire(f"user_connections:{user_id}", 120)
 
     async def disconnect(self, websocket: WebSocket, user_id: int):
         if user_id in self.active_connections:
             if websocket in self.active_connections[user_id]:
                 self.active_connections[user_id].remove(websocket)
+                # Decrease global connection count
+                count = await self.redis.decr(f"user_connections:{user_id}")
+                if count is not None:
+                    if count <= 0:
+                        await self.redis.delete(f"user_connections:{user_id}")
+                    if count < 0:
+                        logger.warning(f"Negative connection count for user {user_id}, resetting.")
+                        await self.redis.set(f"user_connections:{user_id}", 0)
+                    
             if len(self.active_connections[user_id]) == 0:
                 del self.active_connections[user_id]
-                # Global offline presence
-                await self.redis.srem("online_users", user_id)
 
     async def is_user_online(self, user_id: int) -> bool:
-        return await self.redis.sismember("online_users", user_id)
+        count = await self.redis.get(f"user_connections:{user_id}")
+        return int(count or 0) > 0
 
     async def send_personal_event(self, event: str, data: dict, user_id: int):
         payload = {
@@ -61,7 +78,7 @@ class ConnectionManager:
                 try:
                     await connection.send_json({"event": event, "data": data, "instance_id": INSTANCE_ID})
                 except Exception as e:
-                    print(f"WebSocket send error: {e}")
+                    logger.error(f"WebSocket send error: {e}", exc_info=True)
                     await self.disconnect(connection, user_id)
 
     async def _broadcast_to_local_users(self, event: str, data: dict, exclude_user: int = None):
@@ -72,15 +89,20 @@ class ConnectionManager:
                 try:
                     await connection.send_json({"event": event, "data": data, "instance_id": INSTANCE_ID})
                 except Exception as e:
-                    print(f"WebSocket send error: {e}")
+                    logger.error(f"WebSocket broadcast error: {e}", exc_info=True)
                     await self.disconnect(connection, user_id)
 
     async def pubsub_reader(self):
         await self.pubsub.subscribe(self.channel)
-        print(f"[{INSTANCE_ID}] Subscribed to Redis channel: {self.channel}")
+        logger.info(f"[{INSTANCE_ID}] Subscribed to Redis channel: {self.channel}")
         async for message in self.pubsub.listen():
             if message["type"] == "message":
                 payload = json.loads(message["data"])
+                
+                # Optimization: Ignore events published by this exact instance
+                if payload.get("instance_id") == INSTANCE_ID:
+                    continue
+                
                 msg_type = payload.get("type")
                 event = payload.get("event")
                 data = payload.get("data")
@@ -100,7 +122,7 @@ class ConnectionManager:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                print(f"[{INSTANCE_ID}] Redis Pub/Sub error: {e}, reconnecting in 5s...")
+                logger.error(f"[{INSTANCE_ID}] Redis Pub/Sub error: {e}, reconnecting in 5s...", exc_info=True)
                 await asyncio.sleep(5)
 
     async def close(self):
@@ -109,8 +131,8 @@ class ConnectionManager:
             await self.pubsub.unsubscribe(self.channel)
             await self.pubsub.close()
             await self.redis.close()
-            print(f"[{INSTANCE_ID}] Redis connection closed cleanly.")
+            logger.info(f"[{INSTANCE_ID}] Redis connection closed cleanly.")
         except Exception as e:
-            print(f"Error closing redis: {e}")
+            logger.error(f"Error closing redis: {e}", exc_info=True)
 
 manager = ConnectionManager()

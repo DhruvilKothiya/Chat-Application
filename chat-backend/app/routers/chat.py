@@ -124,7 +124,17 @@ async def websocket_endpoint(
                             await manager.send_personal_event("message_seen", {"message_id": message_id}, msg.sender_id)
                             
                 elif event == "ping":
+                    await manager.refresh_user_presence(user.id)
                     await manager.send_personal_event("pong", {}, user.id)
+                    
+                elif event == "ack":
+                    message_id = data.get("message_id")
+                    if message_id:
+                        msg = db.query(models.Message).filter(models.Message.id == message_id).first()
+                        if msg and msg.receiver_id == user.id and not msg.is_delivered:
+                            msg.is_delivered = True
+                            db.commit()
+                            await manager.send_personal_event("message_delivered", {"message_id": message_id}, msg.sender_id)
                     
             except ValueError:
                 await manager.send_personal_event("error", {"message": "Invalid JSON format."}, user.id)
