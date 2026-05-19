@@ -1,0 +1,20 @@
+# =========================
+# Backend
+# =========================
+chat-backend/.env
+chat-backend/venv/
+chat-backend/__pycache__/
+chat-backend/*.pyc
+
+# =========================
+# Frontend
+# =========================
+chat-frontend/node_modules/
+chat-frontend/dist/
+
+# =========================
+# IDE / OS
+# =========================
+.vscode/
+.idea/
+.DS_Store
