@@ -33,6 +33,9 @@ class ConnectionManager:
                     print(f"WebSocket send error, cleaning up dead socket: {e}")
                     self.disconnect(connection, user_id)
 
+    async def send_personal_event(self, event: str, data: dict, user_id: int):
+        await self.send_personal_message({"event": event, "data": data}, user_id)
+
     async def broadcast(self, message: dict):
         for user_id, connections in list(self.active_connections.items()):
             for connection in list(connections):
@@ -40,6 +43,18 @@ class ConnectionManager:
                     await connection.send_json(message)
                 except Exception as e:
                     print(f"WebSocket send error, cleaning up dead socket: {e}")
+                    self.disconnect(connection, user_id)
+
+    async def broadcast_event(self, event: str, data: dict, exclude_user: int = None):
+        payload = {"event": event, "data": data}
+        for user_id, connections in list(self.active_connections.items()):
+            if exclude_user and user_id == exclude_user:
+                continue
+            for connection in list(connections):
+                try:
+                    await connection.send_json(payload)
+                except Exception as e:
+                    print(f"WebSocket broadcast error, cleaning up dead socket: {e}")
                     self.disconnect(connection, user_id)
 
 manager = ConnectionManager()
