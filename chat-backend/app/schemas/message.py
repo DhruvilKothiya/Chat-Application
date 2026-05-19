@@ -1,4 +1,5 @@
 from pydantic import BaseModel
+from typing import List
 from datetime import datetime
 
 class MessageCreate(BaseModel):
@@ -16,3 +17,9 @@ class MessageResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class ChatHistoryResponse(BaseModel):
+    contact_id: int
+    contact_username: str
+    messages: List[MessageResponse]

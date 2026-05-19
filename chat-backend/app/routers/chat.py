@@ -15,26 +15,34 @@ router = APIRouter(
     tags=["Chat"]
 )
 
-@router.get("/history/{contact_id}", response_model=List[message_schema.MessageResponse])
+@router.get("/history/{contact_username}", response_model=message_schema.ChatHistoryResponse)
 def get_chat_history(
-    contact_id: int, 
+    contact_username: str, 
     limit: int = 50,
     offset: int = 0,
     user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
-    Get chat history between the current user and a contact, with offset pagination.
+    Get chat history between the current user and a contact by username, with offset pagination.
     """
+    contact = db.query(models.User).filter(models.User.username == contact_username).first()
+    if not contact:
+        raise HTTPException(status_code=404, detail="User not found")
+
     messages = db.query(models.Message).filter(
         or_(
-            and_(models.Message.sender_id == user.id, models.Message.receiver_id == contact_id),
-            and_(models.Message.sender_id == contact_id, models.Message.receiver_id == user.id)
+            and_(models.Message.sender_id == user.id, models.Message.receiver_id == contact.id),
+            and_(models.Message.sender_id == contact.id, models.Message.receiver_id == user.id)
         )
     ).order_by(models.Message.timestamp.desc()).offset(offset).limit(limit).all()
     
     # Reverse to return messages in chronological order (oldest first)
-    return list(reversed(messages))
+    return {
+        "contact_id": contact.id,
+        "contact_username": contact.username,
+        "messages": list(reversed(messages))
+    }
 
 @router.websocket("/ws")
 async def websocket_endpoint(

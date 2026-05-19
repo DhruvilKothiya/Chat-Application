@@ -8,8 +8,9 @@ import { getChatHistory, getWsUrl } from '../services/api';
 const Chat = () => {
   const [messages, setMessages] = useState([]);
   const [newMessage, setNewMessage] = useState('');
-  const [contactId, setContactId] = useState('');
+  const [contactUsernameInput, setContactUsernameInput] = useState('');
   const [activeContact, setActiveContact] = useState(null);
+  const [activeUsername, setActiveUsername] = useState('');
   const [ws, setWs] = useState(null);
   const [isOnline, setIsOnline] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
@@ -126,11 +127,12 @@ const Chat = () => {
     };
   }, [navigate, activeContact]);
 
-  const loadHistory = async (id) => {
+  const loadHistory = async (username) => {
     try {
-      const history = await getChatHistory(id);
-      setMessages(history);
-      setActiveContact(id);
+      const response = await getChatHistory(username);
+      setMessages(response.messages);
+      setActiveContact(response.contact_id);
+      setActiveUsername(response.contact_username);
       setIsOnline(false); // Can be improved by adding HTTP endpoint to check initial status
     } catch (err) {
       console.error('Failed to load history', err);
@@ -139,8 +141,8 @@ const Chat = () => {
 
   const handleStartChat = (e) => {
     e.preventDefault();
-    if (contactId) {
-      loadHistory(parseInt(contactId));
+    if (contactUsernameInput) {
+      loadHistory(contactUsernameInput);
     }
   };
 
@@ -201,9 +203,9 @@ const Chat = () => {
         <Box component="form" onSubmit={handleStartChat} sx={{ display: 'flex', gap: 1, mb: 3 }}>
           <TextField
             size="small"
-            placeholder="Contact ID (e.g. 2)"
-            value={contactId}
-            onChange={(e) => setContactId(e.target.value)}
+            placeholder="Username (e.g. bob)"
+            value={contactUsernameInput}
+            onChange={(e) => setContactUsernameInput(e.target.value)}
             fullWidth
           />
           <IconButton type="submit" color="primary">
@@ -221,7 +223,7 @@ const Chat = () => {
             border: '1px solid rgba(99, 102, 241, 0.3)'
           }}>
             <Typography variant="subtitle2">Active Chat</Typography>
-            <Typography variant="body2" color="text.secondary">Contact ID: {activeContact}</Typography>
+            <Typography variant="body2" color="text.secondary">@{activeUsername}</Typography>
           </Box>
         )}
       </Paper>
@@ -237,10 +239,10 @@ const Chat = () => {
           <>
             <Box sx={{ p: 2, borderBottom: '1px solid var(--glass-border)', display: 'flex', alignItems: 'center', gap: 2 }}>
               <Badge color="success" variant="dot" invisible={!isOnline}>
-                <Avatar sx={{ bgcolor: 'var(--primary)' }}>{activeContact}</Avatar>
+                <Avatar sx={{ bgcolor: 'var(--primary)' }}>{activeUsername ? activeUsername[0].toUpperCase() : 'U'}</Avatar>
               </Badge>
               <Box>
-                <Typography variant="h6">User {activeContact}</Typography>
+                <Typography variant="h6">{activeUsername}</Typography>
                 {isOnline && <Typography variant="caption" color="success.main">Online</Typography>}
               </Box>
             </Box>
