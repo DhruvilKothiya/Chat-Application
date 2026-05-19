@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Box, Typography, TextField, IconButton, Paper, Avatar, Divider, Button } from '@mui/material';
-import { Send as SendIcon, Logout, Search } from '@mui/icons-material';
+import { Box, Typography, TextField, IconButton, Paper, Avatar, Divider, Badge } from '@mui/material';
+import { Send as SendIcon, Logout, Search, Check, DoneAll } from '@mui/icons-material';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import { getChatHistory, getWsUrl } from '../services/api';
@@ -11,18 +11,20 @@ const Chat = () => {
   const [contactId, setContactId] = useState('');
   const [activeContact, setActiveContact] = useState(null);
   const [ws, setWs] = useState(null);
+  const [isOnline, setIsOnline] = useState(false);
+  const [isTyping, setIsTyping] = useState(false);
   
   const messagesEndRef = useRef(null);
+  const typingTimeoutRef = useRef(null);
   const navigate = useNavigate();
 
-  // Auto-scroll function
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages]);
+  }, [messages, isTyping]);
 
   useEffect(() => {
     const token = localStorage.getItem('token');
@@ -31,18 +33,73 @@ const Chat = () => {
       return;
     }
 
-    // Step 4: Connect WebSocket
     const socket = new WebSocket(getWsUrl());
-    
+    let pingInterval;
+
     socket.onopen = () => {
       console.log('WebSocket Connected');
+      // Start Ping Heartbeat to refresh Redis TTL
+      pingInterval = setInterval(() => {
+        if (socket.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({ event: "ping" }));
+        }
+      }, 30000);
     };
 
-    // Step 7: Receive messages
-    socket.onmessage = (event) => {
+    socket.onmessage = (eventData) => {
       try {
-        const message = JSON.parse(event.data);
-        setMessages((prev) => [...prev, message]);
+        const payload = JSON.parse(eventData.data);
+        const { event, data } = payload;
+
+        switch (event) {
+          case 'receive_message':
+          case 'message_sent':
+            setMessages((prev) => {
+              // Prevent duplicates
+              if (prev.some(m => m.id === data.id)) return prev;
+              return [...prev, data];
+            });
+
+            // If we are receiving, send an ACK back
+            if (event === 'receive_message') {
+              socket.send(JSON.stringify({
+                event: "ack",
+                data: { message_id: data.id }
+              }));
+            }
+            break;
+
+          case 'message_delivered':
+            setMessages((prev) => prev.map(msg => 
+              msg.id === data.message_id ? { ...msg, is_delivered: true } : msg
+            ));
+            break;
+
+          case 'message_seen':
+            setMessages((prev) => prev.map(msg => 
+              msg.id === data.message_id ? { ...msg, is_seen: true } : msg
+            ));
+            break;
+
+          case 'user_online':
+            if (data.user_id === activeContact) setIsOnline(true);
+            break;
+
+          case 'user_offline':
+            if (data.user_id === activeContact) setIsOnline(false);
+            break;
+
+          case 'typing':
+            if (data.sender_id === activeContact) {
+              setIsTyping(true);
+              clearTimeout(typingTimeoutRef.current);
+              typingTimeoutRef.current = setTimeout(() => setIsTyping(false), 2000);
+            }
+            break;
+
+          default:
+            break;
+        }
       } catch (e) {
         console.error('Error parsing message', e);
       }
@@ -50,21 +107,23 @@ const Chat = () => {
 
     socket.onclose = () => {
       console.log('WebSocket Disconnected');
+      clearInterval(pingInterval);
     };
 
     setWs(socket);
 
     return () => {
+      clearInterval(pingInterval);
       socket.close();
     };
-  }, [navigate]);
+  }, [navigate, activeContact]);
 
   const loadHistory = async (id) => {
     try {
-      // Step 5: Load chat history
       const history = await getChatHistory(id);
       setMessages(history);
       setActiveContact(id);
+      setIsOnline(false); // Can be improved by adding HTTP endpoint to check initial status
     } catch (err) {
       console.error('Failed to load history', err);
     }
@@ -77,17 +136,28 @@ const Chat = () => {
     }
   };
 
-  // Step 6: Send messages
+  const handleTyping = (e) => {
+    setNewMessage(e.target.value);
+    if (ws && ws.readyState === WebSocket.OPEN && activeContact) {
+      ws.send(JSON.stringify({
+        event: "typing",
+        data: { receiver_id: activeContact }
+      }));
+    }
+  };
+
   const handleSendMessage = (e) => {
     e.preventDefault();
     if (!newMessage.trim() || !activeContact || !ws) return;
 
-    const payload = {
-      receiver_id: activeContact,
-      message: newMessage
-    };
-
-    ws.send(JSON.stringify(payload));
+    ws.send(JSON.stringify({
+      event: "send_message",
+      data: {
+        receiver_id: activeContact,
+        message: newMessage
+      }
+    }));
+    
     setNewMessage('');
   };
 
@@ -104,7 +174,6 @@ const Chat = () => {
       p: 2,
       gap: 2
     }}>
-      {/* Sidebar for "User List" workaround */}
       <Paper className="glass-panel" sx={{
         width: 300,
         display: 'flex',
@@ -157,13 +226,16 @@ const Chat = () => {
       }}>
         {activeContact ? (
           <>
-            {/* Chat Header */}
             <Box sx={{ p: 2, borderBottom: '1px solid var(--glass-border)', display: 'flex', alignItems: 'center', gap: 2 }}>
-              <Avatar sx={{ bgcolor: 'var(--primary)' }}>{activeContact}</Avatar>
-              <Typography variant="h6">User {activeContact}</Typography>
+              <Badge color="success" variant="dot" invisible={!isOnline}>
+                <Avatar sx={{ bgcolor: 'var(--primary)' }}>{activeContact}</Avatar>
+              </Badge>
+              <Box>
+                <Typography variant="h6">User {activeContact}</Typography>
+                {isOnline && <Typography variant="caption" color="success.main">Online</Typography>}
+              </Box>
             </Box>
 
-            {/* Messages Area */}
             <Box sx={{
               flex: 1,
               p: 2,
@@ -174,7 +246,7 @@ const Chat = () => {
             }}>
               <AnimatePresence>
                 {messages.map((msg, index) => {
-                  const isMine = msg.sender_id !== activeContact && msg.sender_id !== 0; // Assuming sender_id != activeContact is me
+                  const isMine = msg.sender_id !== activeContact && msg.sender_id !== 0;
                   const isSystem = msg.sender_id === 0;
 
                   return (
@@ -191,7 +263,8 @@ const Chat = () => {
                     >
                       <Box sx={{
                         maxWidth: '70%',
-                        p: 2,
+                        p: 1.5,
+                        px: 2.5,
                         borderRadius: 3,
                         background: isSystem 
                           ? 'rgba(255,255,255,0.1)'
@@ -210,15 +283,53 @@ const Chat = () => {
                         <Typography variant="body1" sx={{ wordBreak: 'break-word' }}>
                           {msg.message || msg.content}
                         </Typography>
+                        
+                        {/* Status Ticks for My Messages */}
+                        {isMine && (
+                          <Box sx={{ display: 'flex', justifyContent: 'flex-end', mt: 0.5 }}>
+                            {msg.is_seen ? (
+                              <DoneAll sx={{ fontSize: 16, color: '#4facfe' }} /> // Blue ticks for seen
+                            ) : msg.is_delivered ? (
+                              <DoneAll sx={{ fontSize: 16, color: 'rgba(255,255,255,0.7)' }} /> // Grey ticks for delivered
+                            ) : (
+                              <Check sx={{ fontSize: 16, color: 'rgba(255,255,255,0.7)' }} /> // Single tick for sent
+                            )}
+                          </Box>
+                        )}
                       </Box>
                     </motion.div>
                   );
                 })}
               </AnimatePresence>
+              
+              {/* Typing Indicator */}
+              <AnimatePresence>
+                {isTyping && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, scale: 0.8 }}
+                  >
+                    <Box sx={{ 
+                      display: 'flex', 
+                      gap: 0.5, 
+                      p: 2, 
+                      maxWidth: 'fit-content',
+                      background: 'var(--bg-input)',
+                      borderRadius: 4,
+                      borderBottomLeftRadius: 4
+                    }}>
+                      <motion.div animate={{ y: [0, -5, 0] }} transition={{ repeat: Infinity, duration: 0.6, delay: 0 }} style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--primary)' }} />
+                      <motion.div animate={{ y: [0, -5, 0] }} transition={{ repeat: Infinity, duration: 0.6, delay: 0.2 }} style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--primary)' }} />
+                      <motion.div animate={{ y: [0, -5, 0] }} transition={{ repeat: Infinity, duration: 0.6, delay: 0.4 }} style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--primary)' }} />
+                    </Box>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+              
               <div ref={messagesEndRef} />
             </Box>
 
-            {/* Input Area */}
             <Box component="form" onSubmit={handleSendMessage} sx={{
               p: 2,
               borderTop: '1px solid var(--glass-border)',
@@ -230,7 +341,7 @@ const Chat = () => {
                 placeholder="Type a message..."
                 variant="outlined"
                 value={newMessage}
-                onChange={(e) => setNewMessage(e.target.value)}
+                onChange={handleTyping}
                 autoComplete="off"
               />
               <IconButton 
@@ -250,10 +361,7 @@ const Chat = () => {
         ) : (
           <Box sx={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column' }}>
             <motion.div
-              animate={{
-                scale: [1, 1.1, 1],
-                opacity: [0.5, 1, 0.5]
-              }}
+              animate={{ scale: [1, 1.1, 1], opacity: [0.5, 1, 0.5] }}
               transition={{ repeat: Infinity, duration: 3 }}
             >
               <Typography variant="h4" className="gradient-text" sx={{ opacity: 0.5 }}>
