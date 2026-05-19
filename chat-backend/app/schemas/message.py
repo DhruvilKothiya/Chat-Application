@@ -12,6 +12,8 @@ class MessageResponse(MessageBase):
     id: int
     sender_id: int
     timestamp: datetime
+    is_delivered: bool
+    is_seen: bool
 
     class Config:
         from_attributes = True
