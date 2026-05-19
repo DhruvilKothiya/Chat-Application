@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status
+from jose import jwt, JWTError
 from sqlalchemy.orm import Session
 from app.database import models, connection
 from app.schemas import user as user_schema
@@ -49,10 +50,50 @@ def login(user_credentials: user_schema.UserLogin, db: Session = Depends(connect
             headers={"WWW-Authenticate": "Bearer"},
         )
         
-    # Generate JWT
+    # Generate JWTs
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = security.create_access_token(
         data={"sub": user.email, "id": user.id}, expires_delta=access_token_expires
     )
     
-    return {"access_token": access_token, "token_type": "bearer"}
+    refresh_token = security.create_refresh_token(
+        data={"sub": user.email, "id": user.id}
+    )
+    
+    return {"access_token": access_token, "refresh_token": refresh_token, "token_type": "bearer"}
+
+@router.post("/refresh", response_model=user_schema.Token)
+def refresh_token(token_request: user_schema.RefreshTokenRequest, db: Session = Depends(connection.get_db)):
+    try:
+        payload = jwt.decode(token_request.refresh_token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        if payload.get("type") != "refresh":
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token type")
+            
+        user_email = payload.get("sub")
+        user_id = payload.get("id")
+        
+        if user_email is None or user_id is None:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token payload")
+            
+        # Verify user exists
+        user = db.query(models.User).filter(models.User.id == user_id).first()
+        if not user:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+            
+        # Generate new tokens
+        access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+        new_access_token = security.create_access_token(
+            data={"sub": user.email, "id": user.id}, expires_delta=access_token_expires
+        )
+        
+        new_refresh_token = security.create_refresh_token(
+            data={"sub": user.email, "id": user.id}
+        )
+        
+        return {"access_token": new_access_token, "refresh_token": new_refresh_token, "token_type": "bearer"}
+        
+    except JWTError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid refresh token",
+        )

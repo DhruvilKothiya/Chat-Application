@@ -66,6 +66,14 @@ const Chat = () => {
                 event: "ack",
                 data: { message_id: data.id }
               }));
+              
+              // If we are currently looking at this chat, mark it as seen!
+              if (data.sender_id === activeContact) {
+                socket.send(JSON.stringify({
+                  event: "seen",
+                  data: { message_id: data.id }
+                }));
+              }
             }
             break;
 
@@ -163,6 +171,7 @@ const Chat = () => {
 
   const handleLogout = () => {
     localStorage.removeItem('token');
+    localStorage.removeItem('refresh_token');
     navigate('/');
   };
 

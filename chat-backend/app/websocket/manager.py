@@ -99,9 +99,8 @@ class ConnectionManager:
             if message["type"] == "message":
                 payload = json.loads(message["data"])
                 
-                # Optimization: Ignore events published by this exact instance
-                if payload.get("instance_id") == INSTANCE_ID:
-                    continue
+                # We must process events from our own instance because 
+                # send_personal_event only publishes to Redis and doesn't send locally!
                 
                 msg_type = payload.get("type")
                 event = payload.get("event")
