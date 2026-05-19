@@ -76,11 +76,12 @@ async def websocket_endpoint(
                             continue
                             
                         # Save message
+                        is_receiver_online = await manager.is_user_online(message_data.receiver_id)
                         new_message = models.Message(
                             sender_id=user.id,
                             receiver_id=message_data.receiver_id,
                             content=message_data.message,
-                            is_delivered=True if message_data.receiver_id in manager.online_users else False
+                            is_delivered=True if is_receiver_online else False
                         )
                         db.add(new_message)
                         db.commit()
@@ -129,7 +130,7 @@ async def websocket_endpoint(
                 await manager.send_personal_event("error", {"message": "Invalid JSON format."}, user.id)
             
     except WebSocketDisconnect:
-        manager.disconnect(websocket, user.id)
+        await manager.disconnect(websocket, user.id)
         
         # Update last seen timestamp
         user.last_seen = func.now()
