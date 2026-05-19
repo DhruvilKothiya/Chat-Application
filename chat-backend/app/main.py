@@ -1,13 +1,24 @@
+import asyncio
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
 from app.routers import auth, chat
 from app.database.connection import engine, Base
-from app.database import models  # Ensure models are imported so Base metadata knows about them
+from app.database import models
+from app.websocket.manager import manager
 
 # Create database tables
 Base.metadata.create_all(bind=engine)
 
-app = FastAPI(title="Chat API", version="1.0.0")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: Create a background task for Redis Pub/Sub
+    pubsub_task = asyncio.create_task(manager.pubsub_reader())
+    yield
+    # Shutdown: Cancel the task
+    pubsub_task.cancel()
+
+app = FastAPI(title="Chat API", version="1.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
